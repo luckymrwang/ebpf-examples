@@ -52,25 +52,22 @@ XDP支持将部分或截断的封包内容存放到无锁的per-CPU的内存映�
 
 ### XDP输入参数
 
-XDP暴露的钩子具有特定的输入上下文，它是单一输入参数。它的类型为 `struct xdp_buff`，在内核头文件 [bpf.h](https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/bpf.h#L3309) 中定义，具体字段如下所示：
+XDP暴露的钩子具有特定的输入上下文，它是单一输入参数。它的类型为 `struct xdp_md`，在内核头文件 [bpf.h](https://elixir.bootlin.com/linux/latest/source/include/uapi/linux/bpf.h#L5738) 中定义，具体字段如下所示：
 
 ```c
-struct xdp_buff {
+struct xdp_md {
     // 内存页中，封包数据的开始点指针
-    void *data;
+    __u32 data;
     // 内存页中，封包数据的结束点指针
-    void *data_end;
+    __u32 data_end;
     // 最初和和data指向同一位置。后续可以被bpf_xdp_adjust_meta()调整，向data_hard_start方向移动
     // 可以用于为元数据提供空间。这种元数据对于正常的内核网络栈是不可见的，但是能够被tc BPF程序读取，
     // 因为元数据会从XDP传送到skb中
     // data_meta可以仅仅适用于在尾调用之间传递信息，类似于可被tc访问的skb->cb[]
-    void *data_meta;
-    // XDP支持headroom，这个字段给出页中，此封包可以使用的，最小的地址
-    // 如果封包被封装，则需要调用bpf_xdp_adjust_head()，将data向data_hard_start方向移动
-    // 解封装时，也可以使用bpf_xdp_adjust_head()移动指针
-    void *data_hard_start;
-    // 提供一些额外的per receive queue元数据，这些元数据在ring setup time生成
-    struct xdp_rxq_info *rxq;
+    __u32 data_meta;
+    /* Below access go through struct xdp_rxq_info */
+    __u32 ingress_ifindex; /* rxq->dev->ifindex */
+    __u32 rx_queue_index;  /* rxq->queue_index  */
 };
  
 // 接收队列信息
@@ -81,7 +78,7 @@ struct xdp_rxq_info {
 } ____cacheline_aligned; // 缓存线（默认一般是64KB），CPU以缓存线为单位读取内存到CPU高速缓存
 ```
 
-它通过BPF context传递给XDP程序。
+它通过 `BPF context` 传递给XDP程序。
 
 ### XDP输出参数
 
@@ -133,10 +130,9 @@ sudo dnf install clang llvm gcc libbpf libbpf-devel libxdp libxdp-devel xdp-tool
  */
 #define SEC(NAME) __attribute__((section(NAME), used))
 
-SEC("xdp")
-int xdp_drop_the_world(struct xdp_md *ctx) {
-    // drop everything
-  // 意思是无论什么网络数据包，都drop丢弃掉
+SEC("xdp_drop")
+int xdp_drop_prog(struct xdp_md *ctx) {
+    // 意思是无论什么网络数据包，都drop丢弃掉
     return XDP_DROP;
 }
 
@@ -146,8 +142,8 @@ char _license[] SEC("license") = "GPL";
 其中定义了一个函数，里面就一行代码，返回一个int类型，最后是代码许可证声明。做个简单的解释：
 
 1. 第一部分是第一行的头文件`linux/bpf.h`，它包含了BPF程序使用到的所有结构和常量的定义（除了一些特定的子系统，如TC，它需要额外的头文件)。理论上来说，所有的eBPF程序第一行都是这个头文件。
-2. 第二部分是第二行的宏定义，它的作用是赋予了`SEC(NAME)`这一串字符具有意义，即可以被编译通过。我截取了Linux内核代码里的注释，可以看出这段宏定义是为了ELF格式添加`Section`信息的。ELF全称是`Executable and Linkable Format`，就是可执行文件的一种主流格式（详细介绍点[这里](https://linux-audit.com/elf-binaries-on-linux-understanding-and-analysis/)），广泛用于Linux系统，我们的BPF程序一旦通过编译后，也会是这种格式。下面代码中的`SEC("xdp")`和`SEC("license")`都是基于这个宏定义。
-3. 第三部分，也就是我们的代码主体，它是一个命名为`xdp_drop_the_world`函数，，返回值为int类型，接受一个参数，类型为`xdp_buff`结构，上文已经介绍过，这个例子没有使用到这个参数。函数内的就是一行返回语句，使用`XDP_DROP`，也就是1，意思就是丢弃所有收到的数据包。
+2. 第二部分是第二行的宏定义，它的作用是赋予了`SEC(NAME)`这一串字符具有意义，即可以被编译通过。我截取了Linux内核代码里的注释，可以看出这段宏定义是为了ELF格式添加`Section`信息的。ELF全称是`Executable and Linkable Format`，就是可执行文件的一种主流格式（详细介绍点[这里](https://linux-audit.com/elf-binaries-on-linux-understanding-and-analysis/)），广泛用于Linux系统，我们的BPF程序一旦通过编译后，也会是这种格式。下面代码中的`SEC("xdp_drop")`和`SEC("license")`都是基于这个宏定义。
+3. 第三部分，也就是我们的代码主体，它是一个命名为`xdp_drop_prog`函数，，返回值为int类型，接受一个参数，类型为`xdp_buff`结构，上文已经介绍过，这个例子没有使用到这个参数。函数内的就是一行返回语句，使用`XDP_DROP`，也就是1，意思就是丢弃所有收到的数据包。
 4. 第四部分是最后一行的许可证声明。这行其实是给程序加载到内核时BPF验证器看的，因为有些eBPF函数只能被具有GPL兼容许可证的程序调用。因此，验证器会检查程序所使用的函数的许可证和程序的许可证是否兼容，如果不兼容，则拒绝该程序。
 还有一点，大家是否注意到整个程序是没有main入口的，事实上，程序的执行入口可以由前面提到的ELF格式的对象文件中的Section来指定。入口也有默认值，它是ELF格式文件中.text这个标识的内容，程序编译时会将能看到的函数放到.text里面。
 
