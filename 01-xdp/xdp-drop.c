@@ -9,12 +9,13 @@
 
  * You can either use the helper header file below
  * so that you don't need to define it yourself:
- * #include <bpf/bpf_helpers.h> 
+ * #include <bpf/bpf_helpers.h>
  */
 #define SEC(NAME) __attribute__((section(NAME), used))
 
 SEC("xdp_drop")
-int xdp_drop_prog(struct xdp_md *ctx) {
+int xdp_drop_prog(struct xdp_md *ctx)
+{
     return XDP_DROP;
 }
 
