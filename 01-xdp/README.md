@@ -327,6 +327,10 @@ ip link show eth0
 ip link set eth0 xdp off
 ```
 
+### 执行更高级的操作
+
+分析流量并仅丢弃 `IPv6` 数据包。
+
 ## Ingress or Egress
 
 上面的测试场景是验证了经过目标网络设备的Ingress流量被我们的XDP程序drop了，专业术语叫RX流向。那么Egress流量是否也会被drop掉呢？
