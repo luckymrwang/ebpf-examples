@@ -95,7 +95,7 @@ enum xdp_action {
     XDP_PASS,
     // 将封包从接收到的网络接口发送回去，可用于实现hairpinned LB
     XDP_TX,
-    // 重定向封包给另外一个NIC
+    // 绕过正常的网络堆栈，重定向封包给另外一个NIC
     XDP_REDIRECT,
 };
 ```
@@ -132,7 +132,6 @@ sudo dnf install clang llvm gcc libbpf libbpf-devel libxdp libxdp-devel xdp-tool
 
 SEC("xdp_drop")
 int xdp_drop_prog(struct xdp_md *ctx) {
-    // 意思是无论什么网络数据包，都drop丢弃掉
     return XDP_DROP;
 }
 
@@ -143,7 +142,7 @@ char _license[] SEC("license") = "GPL";
 
 1. 第一部分是第一行的头文件`linux/bpf.h`，它包含了BPF程序使用到的所有结构和常量的定义（除了一些特定的子系统，如TC，它需要额外的头文件)。理论上来说，所有的eBPF程序第一行都是这个头文件。
 2. 第二部分是第二行的宏定义，它的作用是赋予了`SEC(NAME)`这一串字符具有意义，即可以被编译通过。我截取了Linux内核代码里的注释，可以看出这段宏定义是为了ELF格式添加`Section`信息的。ELF全称是`Executable and Linkable Format`，就是可执行文件的一种主流格式（详细介绍点[这里](https://linux-audit.com/elf-binaries-on-linux-understanding-and-analysis/)），广泛用于Linux系统，我们的BPF程序一旦通过编译后，也会是这种格式。下面代码中的`SEC("xdp_drop")`和`SEC("license")`都是基于这个宏定义。
-3. 第三部分，也就是我们的代码主体，它是一个命名为`xdp_drop_prog`函数，，返回值为int类型，接受一个参数，类型为`xdp_buff`结构，上文已经介绍过，这个例子没有使用到这个参数。函数内的就是一行返回语句，使用`XDP_DROP`，也就是1，意思就是丢弃所有收到的数据包。
+3. 第三部分，也就是我们的代码主体，它是一个命名为`xdp_drop_prog`函数，，返回值为int类型，接受一个参数，类型为`xdp_md`结构，上文已经介绍过，这个例子没有使用到这个参数。函数内的就是一行返回语句，使用`XDP_DROP`，也就是1，意思就是丢弃所有收到的数据包。
 4. 第四部分是最后一行的许可证声明。这行其实是给程序加载到内核时BPF验证器看的，因为有些eBPF函数只能被具有GPL兼容许可证的程序调用。因此，验证器会检查程序所使用的函数的许可证和程序的许可证是否兼容，如果不兼容，则拒绝该程序。
 还有一点，大家是否注意到整个程序是没有main入口的，事实上，程序的执行入口可以由前面提到的ELF格式的对象文件中的Section来指定。入口也有默认值，它是ELF格式文件中.text这个标识的内容，程序编译时会将能看到的函数放到.text里面。
 
@@ -157,43 +156,45 @@ char _license[] SEC("license") = "GPL";
 
 # 查看生成的elf格式的可执行文件的相关信息
 # 能看到上文提到的Section信息
-> readelf -a xdp-drop-world.o
-ELF Header:
-  Magic:   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00
-  Class:                             ELF64
-  Data:                              2's complement, little endian
+> readelf -a xdp-drop.o
+ELF 头：
+  Magic：   7f 45 4c 46 02 01 01 00 00 00 00 00 00 00 00 00 
+  类别:                              ELF64
+  数据:                              2 补码，小端序 (little endian)
   Version:                           1 (current)
   OS/ABI:                            UNIX - System V
-  ABI Version:                       0
-  Type:                              REL (Relocatable file)
-  Machine:                           Linux BPF
-  Version:                           0x1
-  Entry point address:               0x0
-  Start of program headers:          0 (bytes into file)
-  Start of section headers:          216 (bytes into file)
-  Flags:                             0x0
+  ABI 版本:                          0
+  类型:                              REL (可重定位文件)
+  系统架构:                          Linux BPF
+  版本:                              0x1
+  入口点地址：               0x0
+  程序头起点：          0 (bytes into file)
+  Start of section headers:          272 (bytes into file)
+  标志：             0x0
   Size of this header:               64 (bytes)
   Size of program headers:           0 (bytes)
   Number of program headers:         0
   Size of section headers:           64 (bytes)
-  Number of section headers:         6
+  Number of section headers:         7
   Section header string table index: 1
 
-Section Headers:
-  [Nr] Name              Type             Address           Offset
-       Size              EntSize          Flags  Link  Info  Align
+节头：
+  [号] 名称              类型             地址              偏移量
+       大小              全体大小          旗标   链接   信息   对齐
   [ 0]                   NULL             0000000000000000  00000000
        0000000000000000  0000000000000000           0     0     0
-  [ 1] .strtab           STRTAB           0000000000000000  000000a0
-       0000000000000037  0000000000000000           0     0     1
+  [ 1] .strtab           STRTAB           0000000000000000  000000ba
+       0000000000000050  0000000000000000           0     0     1
   [ 2] .text             PROGBITS         0000000000000000  00000040
        0000000000000000  0000000000000000  AX       0     0     4
-  [ 3] xdp               PROGBITS         0000000000000000  00000040
+  [ 3] xdp_drop          PROGBITS         0000000000000000  00000040
        0000000000000010  0000000000000000  AX       0     0     8
   [ 4] license           PROGBITS         0000000000000000  00000050
        0000000000000004  0000000000000000  WA       0     0     1
-  [ 5] .symtab           SYMTAB           0000000000000000  00000058
-       0000000000000048  0000000000000018           1     1     8
+  [ 5] .llvm_addrsig     LOOS+0xfff4c03   0000000000000000  000000b8
+       0000000000000002  0000000000000000   E       6     0     1
+  [ 6] .symtab           SYMTAB           0000000000000000  00000058
+       0000000000000060  0000000000000018           1     2     8
 Key to Flags:
   W (write), A (alloc), X (execute), M (merge), S (strings), I (info),
   L (link order), O (extra OS processing required), G (group), T (TLS),
@@ -202,19 +203,20 @@ Key to Flags:
 
 There are no section groups in this file.
 
-There are no program headers in this file.
+本文件中没有程序头。
 
 There is no dynamic section in this file.
 
-There are no relocations in this file.
+该文件中没有重定位信息。
 
 The decoding of unwind sections for machine type Linux BPF is not currently supported.
 
-Symbol table '.symtab' contains 3 entries:
+Symbol table '.symtab' contains 4 entries:
    Num:    Value          Size Type    Bind   Vis      Ndx Name
-     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND
-     1: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT    4 _license
-     2: 0000000000000000     0 NOTYPE  GLOBAL DEFAULT    3 xdp_drop_the_world
+     0: 0000000000000000     0 NOTYPE  LOCAL  DEFAULT  UND 
+     1: 0000000000000000     0 FILE    LOCAL  DEFAULT  ABS xdp-drop.c
+     2: 0000000000000000     4 OBJECT  GLOBAL DEFAULT    4 _license
+     3: 0000000000000000    16 FUNC    GLOBAL DEFAULT    3 xdp_drop_prog
 
 No version information found in this file.
 ```
@@ -222,18 +224,18 @@ No version information found in this file.
 还可以通过llvm-objdump这个工具来分析下这个可执行文件的反汇编指令信息：
 
 ```bash
-> llvm-objdump -S xdp-drop-world.o
-xdp-world-drop.o:  file format ELF64-BPF
+> llvm-objdump -S xdp-drop.o
+xdp-drop.o:  file format ELF64-BPF
 
 Disassembly of section xdp:
-xdp_drop_the_world:
+xdp_drop:
        0:  b7 00 00 00 01 00 00 00   r0 = 1 # 1代表XDP_DROP，这句指令表示赋值1到代表返回值的寄存器r0
        1:  95 00 00 00 00 00 00 00   exit
 ```
 
 ### 加载XDP程序
 
-由于我们的实验环境配置的网卡和网卡驱动都不支持XDP hook，所以肯定是用了 xdpgeneric模式。加载XDP程序就要用到ip这个命令行工具，它能帮助我们将程序加载到内核的XDP Hook上。上命令：
+由于我们的实验环境配置的网卡和网卡驱动都不支持`XDP hook`，所以肯定是用了 `xdpgeneric`模式。加载XDP程序就要用到ip这个命令行工具，它能帮助我们将程序加载到内核的`XDP Hook`上。上命令：
 
 ```sh
 ip link set dev [device name] xdp obj xdp-drop.o sec [section name]
@@ -256,7 +258,7 @@ ip link set dev [device name] xdp obj xdp-drop.o sec [section name]
     inet6 fe80::a00:27ff:fe5c:7d8f/64 scope link
        valid_lft forever preferred_lft forever
 # 加载XDP程序到这个网卡设备上
-> ip link set dev eth0 xdp obj xdp-drop.o sec xdp verbose
+> ip link set dev eth0 xdp obj xdp-drop.o sec xdp_drop verbose
 # 如下信息就是没有报错，说明已经通过BPF验证器并attach到内核XDP hook上了
 Prog section 'xdp' loaded (5)!
  - Type:         6
@@ -273,11 +275,43 @@ processed 2 insns, stack depth 0
 ### 显示eBPF程序状态
 
 ```bash
-sudo bpftool prog show
+bpftool prog show
+
+3: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:07+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+4: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:07+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+5: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:07+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+6: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:07+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+7: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:09+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+8: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:09+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+13: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:10+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+14: cgroup_skb  tag 6deef7357e7b4530  gpl
+	loaded_at 2022-05-22T15:26:10+0000  uid 0
+	xlated 64B  jited 54B  memlock 4096B
+45: xdp  name xdp_drop_prog  tag 57cd311f2e27366b  gpl
+	loaded_at 2022-05-23T07:50:14+0000  uid 0
+	xlated 16B  jited 18B  memlock 4096B
 ```
 
 ```bash
-sudo ip link show veth1
+ip link show eth0
+
+12: eth0@if13: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 xdp qdisc noqueue state UP mode DEFAULT group default 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    prog/xdp id 45 tag 57cd311f2e27366b jited
 ```
 
 ### 验证XDP程序的效果
@@ -286,6 +320,12 @@ sudo ip link show veth1
 
 1. 从外部ping作为实验环境的虚拟机IP（就是上文中的192.168.58.112），期望是无法ping通。
 2. 然后通过以下命令把XDP卸载掉，即detach from XDP hook，发现又能ping通。
+
+### 卸载 XDP 程序
+
+```bash
+ip link set eth0 xdp off
+```
 
 ## Ingress or Egress
 

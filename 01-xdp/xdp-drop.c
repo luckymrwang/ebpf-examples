@@ -15,7 +15,6 @@
 
 SEC("xdp_drop")
 int xdp_drop_prog(struct xdp_md *ctx) {
-    // 意思是无论什么网络数据包，都drop丢弃掉
     return XDP_DROP;
 }
 
