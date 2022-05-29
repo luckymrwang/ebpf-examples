@@ -1,0 +1,79 @@
+docker build -t xdp-drop-test .
+Sending build context to Docker daemon  118.8kB
+Step 1/9 : FROM ubuntu:18.04 as build
+ ---> a2a15febcdf3
+Step 2/9 : RUN export DEBIAN_FRONTEND=noninteractive   && apt-get update && apt-get install -y make gcc libssl-dev bc   libelf-dev libcap-dev clang gcc-multilib llvm libncurses5-dev git   pkg-config libmnl-dev bison flex graphviz
+ ---> Using cache
+ ---> 28d856e2ef1e
+Step 3/9 : COPY *.c /
+ ---> Using cache
+ ---> 7fc05d3ca2d6
+Step 4/9 : RUN clang -g -c -O2 -target bpf -c xdp-drop.c -o xdp-drop.o   && objdump -t xdp-drop.o
+ ---> Using cache
+ ---> 2fa46811e204
+Step 5/9 : FROM ubuntu:18.04
+ ---> a2a15febcdf3
+Step 6/9 : RUN export DEBIAN_FRONTEND=noninteractive   && apt-get update && apt-get install -y iproute2 iputils-ping
+ ---> Using cache
+ ---> 1d430ccbc117
+Step 7/9 : COPY --from=build /xdp-drop.o /
+ ---> Using cache
+ ---> a7f01d816001
+Step 8/9 : COPY /entrypoint.sh /
+ ---> Using cache
+ ---> ebf527ab74e8
+Step 9/9 : ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
+ ---> Using cache
+ ---> fb68eddd8b1e
+Successfully built fb68eddd8b1e
+Successfully tagged xdp-drop-test:latest
+docker run --privileged -ti --rm --name xdp-drop-test xdp-drop-test
+84: eth0@if85: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP group default 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    inet 172.17.0.2/16 brd 172.17.255.255 scope global eth0
+       valid_lft forever preferred_lft forever
+
+-------------------------------------------------------------
+Without XDP drop app installed, ping to 172.17.0.1 works ...
+84: eth0@if85: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue state UP mode DEFAULT group default 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+PING 172.17.0.1 (172.17.0.1) 56(84) bytes of data.
+64 bytes from 172.17.0.1: icmp_seq=1 ttl=64 time=0.055 ms
+64 bytes from 172.17.0.1: icmp_seq=2 ttl=64 time=0.090 ms
+64 bytes from 172.17.0.1: icmp_seq=3 ttl=64 time=0.088 ms
+
+--- 172.17.0.1 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2025ms
+rtt min/avg/max/mdev = 0.055/0.077/0.090/0.019 ms
+-------------------------------------------------------------
+Installing xdp-drop.o app on eth0 ...
+84: eth0@if85: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 xdp qdisc noqueue state UP mode DEFAULT group default 
+    link/ether 02:42:ac:11:00:02 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+    prog/xdp id 21 tag 2e4d04fb1c2c6dc6 jited 
+Now ping will fail ...
+PING 172.17.0.1 (172.17.0.1) 56(84) bytes of data.
+
+--- 172.17.0.1 ping statistics ---
+3 packets transmitted, 0 received, 100% packet loss, time 2037ms
+
+Good. ping failed
+
+but apt-get update still works ...
+0% [Working]            Hit:1 http://archive.ubuntu.com/ubuntu bionic InRelease
+0% [Connecting to security.ubuntu.com (91.189.91.26)]0% [1 InRelease gpgv 242 kB] [Waiting for headers] [Connecting to security.ubun                                                                               Hit:2 http://archive.ubuntu.com/ubuntu bionic-updates InRelease
+                                                                               0% [1 InRelease gpgv 242 kB] [Waiting for headers]                                                  Hit:3 http://archive.ubuntu.com/ubuntu bionic-backports InRelease
+0% [1 InRelease gpgv 242 kB] [Waiting for headers]                                                  0% [Waiting for headers]0% [2 InRelease gpgv 88.7 kB] [Waiting for headers]                                                   Hit:4 http://security.ubuntu.com/ubuntu bionic-security InRelease
+                                                   0% [2 InRelease gpgv 88.7 kB]                             0% [Working]0% [3 InRelease gpgv 74.6 kB]                             0% [Working]0% [4 InRelease gpgv 88.7 kB]                             20% [Working]             Reading package lists... 0%Reading package lists... 0%Reading package lists... 0%Reading package lists... 7%Reading package lists... 7%Reading package lists... 7%Reading package lists... 7%Reading package lists... 70%Reading package lists... 70%Reading package lists... 70%Reading package lists... 70%Reading package lists... 78%Reading package lists... 78%Reading package lists... 78%Reading package lists... 78%Reading package lists... 88%Reading package lists... 88%Reading package lists... 88%Reading package lists... 88%Reading package lists... 88%Reading package lists... 88%Reading package lists... 88%Reading package lists... 88%Reading package lists... 93%Reading package lists... 93%Reading package lists... 93%Reading package lists... 93%Reading package lists... 99%Reading package lists... 99%Reading package lists... 99%Reading package lists... 99%Reading package lists... Done
+-------------------------------------------------------------
+Uninstalling xdp-drop app ...
+Now ping works again ...
+PING 172.17.0.1 (172.17.0.1) 56(84) bytes of data.
+64 bytes from 172.17.0.1: icmp_seq=1 ttl=64 time=0.023 ms
+64 bytes from 172.17.0.1: icmp_seq=2 ttl=64 time=0.037 ms
+64 bytes from 172.17.0.1: icmp_seq=3 ttl=64 time=0.093 ms
+
+--- 172.17.0.1 ping statistics ---
+3 packets transmitted, 3 received, 0% packet loss, time 2049ms
+rtt min/avg/max/mdev = 0.023/0.051/0.093/0.030 ms
+
+it worked!

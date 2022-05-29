@@ -1,0 +1,11 @@
+FROM alpine:3.11
+RUN apk add --no-cache clang linux-headers iproute2 llvm9
+COPY entrypoint.sh xdp-drop.c /
+RUN clang -Wall -O2 -c -g -target bpf -c xdp-drop.c -o xdp-drop.o
+COPY xdp-drop.o /xdp-ubuntu.o
+
+echo "while compiling works, alpine 3.11 ip command fails to load xdp with the following errror:"
+echo "git submodule update --init"
+
+ENTRYPOINT ["/bin/sh", "/entrypoint.sh"]
+
