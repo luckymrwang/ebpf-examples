@@ -114,7 +114,7 @@ sudo dnf install clang llvm gcc libbpf libbpf-devel libxdp libxdp-devel xdp-tool
 
 所有的包都会被丢弃，具体代码如下：
 
-```c
+```c++
 #include <linux/bpf.h>
 
 /*
