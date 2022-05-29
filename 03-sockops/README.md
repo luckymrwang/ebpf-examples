@@ -1,8 +1,8 @@
 # 简介
 
-本文展示如何编写简单的 BPF 程序做 socket level 重定向（redirection）。对于源和目的端都在同一台机器的应用来说，这样可以绕过整个 TCP/IP 协议栈，直接将数据发送到 socket 对端。效果如右下图（直接从 Cilium 分享截图，所以其中 Cilium 字样，但本文不需要 Cilium）
+本文展示如何编写简单的 BPF 程序做 socket level 重定向（redirection）。对于源和目的端都在同一台机器的应用来说，这样可以绕过整个 TCP/IP 协议栈，直接将数据发送到 socket 对端。效果如下图
 
-![image](../images/sock-redir.png)
+![image](../images/sock-redir.jpeg)
 
 实现这个功能依赖两个东西：
 
@@ -59,6 +59,10 @@
 1. 系统中有 socket 操作时（例如 connection establishment、tcp retransmit 等），触发执行；
     - 指定加载位置来实现：__section("sockops")
 2. 执行逻辑：提取 socket 信息，并以 key & value 形式存储到 sockmap。
+
+如下图中 sockmap 的 value 所存储的 skops 结构：
+
+![image](../images/sock-map.jpeg)
 
 ```c++
 __section("sockops") // 加载到 ELF 中的 `sockops` 区域，有 socket operations 时触发执行
