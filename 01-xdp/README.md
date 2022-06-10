@@ -329,7 +329,7 @@ ip link set eth0 xdp off
 
 ### 执行更高级的操作
 
-分析流量并仅丢弃 `IPv6` 数据包。
+- 分析流量并仅丢弃 `IPv6` 数据包。
 
 ```c
 #include <linux/bpf.h>
