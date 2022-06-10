@@ -359,8 +359,43 @@ int xdp_drop_prog(struct xdp_md *ctx)
 char _license[] SEC("license") = "GPL";
 ```
 
-## Ingress or Egress
+- 丢弃所有基于TCP协议的数据包
 
-上面的测试场景是验证了经过目标网络设备的Ingress流量被我们的XDP程序drop了，专业术语叫RX流向。那么Egress流量是否也会被drop掉呢？
+```c
+#include <linux/bpf.h>
+#include <linux/in.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
 
-答案是，不会。XDP hook不会作用到Egress流量，也就是TX流向。读者可以自行在已经attach XDP程序的实验环境中，ping一个外部地址，请保证这次请求会经过被attach XDP程序的网络设备。其结果就是请求没有收到任何影响。
+#define SEC(NAME) __attribute__((section(NAME), used))
+
+SEC("drop_tcp")
+int dropper(struct xdp_md *ctx)
+{
+  int ipsize = 0;
+
+  void *data = (void *)(long)ctx->data;
+  void *data_end = (void *)(long)ctx->data_end;
+
+  struct ethhdr *eth = data;
+  ipsize = sizeof(*eth);
+  struct iphdr *ip = data + ipsize;
+  ipsize += sizeof(struct iphdr);
+
+  if (data + ipsize > data_end)
+  {
+    return XDP_PASS;
+  }
+
+  // 判断是否该数据包是否基于TCP协议
+  if (ip->protocol == IPPROTO_TCP)
+  {
+    // 丢弃该数据包
+    return XDP_DROP;
+  }
+
+  return XDP_PASS;
+}
+
+char _license[] SEC("license") = "GPL";
+```
