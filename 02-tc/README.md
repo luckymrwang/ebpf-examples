@@ -228,3 +228,268 @@ struct __sk_buff {
 #define TC_ACT_REDIRECT         7 
 ```
 
+## 程序编写
+
+### 开发环境
+
+```
+sudo dnf install clang llvm gcc libbpf libbpf-devel libxdp libxdp-devel xdp-tools bpftool kernel-headers
+```
+
+### TC程序
+
+丢弃所有基于TCP协议的数据包，具体代码如下：
+
+```c
+#include <stdbool.h>
+#include <linux/bpf.h>
+#include <linux/if_ether.h>
+#include <linux/ip.h>
+#include <linux/in.h>
+#include <linux/pkt_cls.h>
+
+#include "bpf_endian.h"
+#include "bpf_helpers.h"
+
+// static bool is_TCP(void *data_begin, void *data_end);
+
+/*
+  check whether the packet is of TCP protocol
+*/
+static bool is_TCP(void *data_begin, void *data_end){
+  struct ethhdr *eth = data_begin;
+
+  // Check packet's size
+  // the pointer arithmetic is based on the size of data type, current_address plus int(1) means:
+  // new_address= current_address + size_of(data type)
+  if ((void *)(eth + 1) > data_end) //
+    return false;
+
+  // Check if Ethernet frame has IP packet
+  if (eth->h_proto == bpf_htons(ETH_P_IP))
+  {
+    struct iphdr *iph = (struct iphdr *)(eth + 1); // or (struct iphdr *)( ((void*)eth) + ETH_HLEN );
+    if ((void *)(iph + 1) > data_end)
+      return false;
+
+    // Check if IP packet contains a TCP segment
+    if (iph->protocol == IPPROTO_TCP)
+      return true;
+  }
+
+  return false;
+}
+
+SEC("xdp")
+int xdp_drop_tcp(struct xdp_md *ctx)
+{
+
+  void *data_end = (void *)(long)ctx->data_end;
+  void *data = (void *)(long)ctx->data;
+
+  if (is_TCP(data, data_end))
+    return XDP_DROP;
+
+  return XDP_PASS;
+}
+
+SEC("tc")
+int tc_drop_tcp(struct __sk_buff *skb)
+{
+
+  void *data = (void *)(long)skb->data;
+  void *data_end = (void *)(long)skb->data_end;
+
+  if (is_TCP(data, data_end)) 
+    return TC_ACT_SHOT;
+
+  return TC_ACT_OK;
+}
+
+char _license[] SEC("license") = "GPL";
+```
+
+代码关键点作以下说明：
+
+1. 代码结构上定义了两个`Section`作为XDP和TC的入口，还有一个 `is_TCP` 功能函数，判断是否是TCP网络包，供两个`Section`调用。这样做的好处是只要维护一份代码文件，根据Section名称，分别给`XDP hook`和`TC hook`加载。
+2. 这次的include的header文件很多，其中 `bpf_endian.h`和`bpf_helpers`是本地引用的头文件，其实是从内核代码的[这个位置](https://elixir.bootlin.com/linux/v4.15/source/tools/testing/selftests/bpf)复制过来的，这个是参照了[sample/bpf](https://elixir.bootlin.com/linux/v4.15/source/samples/bpf/)里面示例代码的做法。它们都是工具类函数集合，在写复杂逻辑时非常有用。
+
+3. 在is_TCP 这个函数里，有如下这一段：
+
+```c
+if ((void *)(eth + 1) > data_end)
+    return false;
+```
+
+它有两层含义：
+
+- 括号里运算式`eth+1`是个非常有趣的表达式，它的本质是指针运算，指针变量+1就是指针向右移动n个字节，这个n为该指针变量指向的对象类型的字节长度，这里就是`struct ethhdr`的字节长度，为14个字节，可以在[这个内核头文件](https://elixir.bootlin.com/linux/v4.15/source/include/uapi/linux/if_ether.h)里找到相关定义：
+
+```c
+struct ethhdr {
+  // ETH_ALEN 为6个字节
+  unsigned char  h_dest[ETH_ALEN]; /* destination eth addr */
+  unsigned char  h_source[ETH_ALEN]; /* source ether addr */
+  // __be16 为16 bit，也就是2个字节
+  __be16   h_proto; /* packet type ID field */
+}
+// 所以整个struct就是14个字节长度。
+```
+
+如果不使用指针运算，还是作显式的长度判断，如下所示：
+
+```c
+u64 h_offset;
+struct ethhdr *eth = data;
+// 显式声明并赋值ethhdr长度
+h_offset = sizeof(*eth);
+// 根据左右变量类型，运算符号加号重载成相关运算机制
+if (data + h_offset > data_end)
+    return false; 
+```
+
+另外，注意观察`(eth + 1)`前面加了一个显示类型转换，如果不做这个操作，编译时会有如下warning。代码里其他类似这样的显示类型转换都是出于规避编译warning的考虑。
+
+```c
+warning: comparison of distinct pointer types
+('struct ethhdr *' and 'void *') [-Wcompare-distinct-pointer-types]
+if (eth + 1 > data_end)
+    ~~~~~~~ ^ ~~~~~~~~
+1 warning generated.
+```
+
+那整体的if语句判断目的是什么呢？目的是判断括号内运算结果会不会内存越界，这对于BPF验证器来说是必要的，如果没有，BPF验证器会阻止这个程序加载到内核中。由于我们需要通过右移data变量获取到IP头，如下代码为获取IP头：
+
+```c
+struct iphdr *iph = (struct iphdr *)(eth + 1);
+```
+
+因此需要判断这个右移结果是否有效，如果无效，就直接return出去了，防止内存越界。类似的右移判断逻辑在BPF程序里出现频次会很高，一定要做好边界判断逻辑。
+
+### 编译代码
+
+跟XDP程序一样，可以使用clang进行编译，不同之处是由于引用了本地头文件，所以需要加上`-I`参数，指定头文件所在目录：
+
+```c
+clang -I ./headers/ -O2 -target bpf -c tc-xdp-drop-tcp.c -o tc-xdp-drop-tcp.o
+```
+
+### 加载到内核
+
+#### TC加载简介
+如同`XDP BPF`程序可以通过`ip`命令进行加载，只要你安装了`iproute2`，也可以通过tc命令加载TC BPF程序。上文提到的了TC控制的单元是qdisc，用来加载BPF程序是个特殊的qdisc 叫clsact，示例命令如下所示：
+
+```bash
+# 为目标网卡创建clsact
+tc qdisc add dev [network-device] clsact
+# 加载bpf程序
+tc filter add dev [network-device] <direction> bpf da obj [object-name] sec [section-name]
+# 查看
+tc filter show dev [network-device] <direction>
+```
+
+简单说明下：
+
+- 示例中有个参数`<direction>`，它表示将bpf程序加载到哪条网络链路上，它的值可以是`ingress`和`egress`。
+- 还有一个不起眼的参数da，它的全称是`direct-action`。查看帮助文档：
+
+```c
+direct-action | da
+instructs eBPF classifier to not invoke external TC actions, instead use the TC actions return codes (TC_ACT_OK, TC_ACT_SHOT etc.) for classifiers.
+```
+
+为了了解并学习容器网络Cilium的工作原理，这次拿容器实例作为流控目标。在实验环境上通过`docker run`运行一个Nginx服务：
+
+```docker
+docker run -d -p 80:80 --name=nginx-xdp nginx:alpine
+```
+
+这样主机层就会多出一个`veth`网络设备，与容器里的`eth0`形成`veth pair`，流量都是通过这对`veth pair`。因此我们可以将XDP程序`attach`到主机层的veth网络设备上，以此控制容器流量：
+
+```sh
+> ip a | grep veth
+6: veth09e1d2e@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master docker0 state UP group default
+# 加载XDP BPF程序
+> ip link set dev veth09e1d2e xdp obj tc-xdp-drop-tcp.o sec xdp
+```
+
+下面是结合容器实现TC BPF控制Egress的真实命令：
+
+```
+# 最开始的状态
+> tc qdisc show dev veth09e1d2e
+qdisc noqueue 0: root refcnt 2
+# 创建clsact
+> tc qdisc add dev veth09e1d2e clsact
+# 再次查看，观察有什么不同
+> tc qdisc show dev veth09e1d2e
+qdisc noqueue 0: root refcnt 2
+qdisc clsact ffff: parent ffff:fff1
+# 加载TC BPF程序到容器的veth网卡上
+> tc filter add dev veth09e1d2e egress bpf da obj tc-xdp-drop-tcp.o sec tc
+# 再次查看，观察有什么不同
+> tc qdisc show dev veth09e1d2e
+qdisc noqueue 0: root refcnt 2
+qdisc clsact ffff: parent ffff:fff1
+> tc filter show dev veth09e1d2e egress
+filter protocol all pref 49152 bpf chain 0
+filter protocol all pref 49152 bpf chain 0 handle 0x1 tc-xdp-drop-tcp.o:[tc] direct-action not_in_hw id 24 tag 9c60324798bac8be jited
+```
+
+#### 编译
+
+将编译成功后输出的`tc-xdp-drop-tcp.o`文件，通过tc命令行加载到指定网卡设备上去。下面是使用verbose模式后的加载结果，可以看到BPF验证器通过检查`tc-xdp-drop-tcp.o`文件包含的BPF instructions，保障了加载到内核的安全性。
+
+
+```c
+> tc filter add dev veth09e1d2e egress bpf da obj tc-xdp-drop-tcp.o sec tc verbose
+Prog section 'tc' loaded (5)!
+ - Type:         3
+ - Instructions: 19 (0 over limit)
+ - License:      GPL
+Verifier analysis:
+0: (61) r2 = *(u32 *)(r1 +80)
+1: (61) r1 = *(u32 *)(r1 +76)
+2: (bf) r3 = r1
+3: (07) r3 += 14
+4: (2d) if r3 > r2 goto pc+12
+ R1=pkt(id=0,off=0,r=14,imm=0) R2=pkt_end(id=0,off=0,imm=0) R3=pkt(id=0,off=14,r=14,imm=0) R10=fp0
+5: (bf) r3 = r1
+6: (07) r3 += 34
+7: (2d) if r3 > r2 goto pc+9
+ R1=pkt(id=0,off=0,r=34,imm=0) R2=pkt_end(id=0,off=0,imm=0) R3=pkt(id=0,off=34,r=34,imm=0) R10=fp0
+8: (71) r2 = *(u8 *)(r1 +13)
+9: (67) r2 <<= 8
+10: (71) r3 = *(u8 *)(r1 +12)
+11: (4f) r2 |= r3
+12: (57) r2 &= 65535
+13: (55) if r2 != 0x8 goto pc+3
+ R1=pkt(id=0,off=0,r=34,imm=0) R2=inv8 R3=inv(id=0,umax_value=255,var_off=(0x0; 0xff)) R10=fp0
+14: (b7) r0 = 2
+15: (71) r1 = *(u8 *)(r1 +23)
+16: (15) if r1 == 0x6 goto pc+1
+ R0=inv2 R1=inv(id=0,umax_value=255,var_off=(0x0; 0xff)) R2=inv8 R3=inv(id=0,umax_value=255,var_off=(0x0; 0xff)) R10=fp0
+17: (b7) r0 = 0
+18: (95) exit
+from 16 to 18: R0=inv2 R1=inv6 R2=inv8 R3=inv(id=0,umax_value=255,var_off=(0x0; 0xff)) R10=fp0
+18: (95) exit
+from 13 to 17: safe
+from 7 to 17: safe
+from 4 to 17: safe
+processed 23 insns, stack depth 0
+```
+
+### TC和BPF亲密合作
+
+用到了一个参数da，它的全称是「direct action」。其实它是TC支持BPF后的「亲密合作」的产物。
+
+对于tc filter来说，一般在命中过滤条件后需要指定下一步操作动作，如：
+
+
+```c
+# 一个没有使用bpf的tc filter
+tc filter add dev eth0 protocol ip parent 1:0 prio 1 u32 \
+    match ip src 1.2.3.4 action drop
+```
+
+注意到这个`tc filter`后面跟了一个`action drop`，意思是命中过滤条件后将网络包丢弃，而这个操作动作如果我们使用BPF程序，其实就是已经定义在程序里了。为了避免重复指定，内核引入了da模式，告诉TC请repect BPF程序提供的返回值，无需再手动指定action了，节省了调用action模块的开销，这也是目前`TC with BPF`的推荐做法。[这篇文章](https://qmonnet.github.io/whirl-offload/2020/04/11/tc-bpf-direct-action/)对此作了详细介绍。
