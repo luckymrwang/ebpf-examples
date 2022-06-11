@@ -2,7 +2,7 @@
 
 ## TC 简介
 
-在介绍 direct-action 之前，需要先回顾一下 Linux TC 的经典使用场景和使用方式。TC全称「Traffic Control」，即「流量控制」，流量控制最终是在内核中完成的：`TC` 模块根据不同算法对网络设备上的流量进行控制 （限速、设置优先级等等）。用户一般通过 iproute2 中的 `TC` 工具完成配置 —— 这是与 内核 TC 子系统相对应的用户侧工具 —— 二者之间（大部分情况下）通过 Netlink 消息通信。
+在介绍 direct-action 之前，需要先回顾一下 Linux TC 的经典使用场景和使用方式。TC全称「Traffic Control」，即「流量控制」，流量控制最终是在内核中完成的：`TC` 模块根据不同算法对网络设备上的流量进行控制 （限速、设置优先级等等）。用户一般通过 iproute2 中的 `TC` 工具完成配置 —— 这是与内核 TC 子系统相对应的用户侧工具 —— 二者之间（大部分情况下）通过 Netlink 消息通信。
 
 BPF可以和内核的TC层一起工作。TC程序和XDP程序有以下不同：
 
@@ -377,7 +377,7 @@ clang -I ./headers/ -O2 -target bpf -c tc-xdp-drop-tcp.c -o tc-xdp-drop-tcp.o
 ### 加载到内核
 
 #### TC加载简介
-如同`XDP BPF`程序可以通过`ip`命令进行加载，只要你安装了`iproute2`，也可以通过tc命令加载TC BPF程序。上文提到的了TC控制的单元是qdisc，用来加载BPF程序是个特殊的qdisc 叫clsact，示例命令如下所示：
+如同`XDP BPF`程序可以通过`ip`命令进行加载，只要你安装了`iproute2`，也可以通过tc命令加载TC BPF程序。上文提到的了TC控制的单元是qdisc，用来加载BPF程序是个特殊的qdisc叫`clsact`，示例命令如下所示：
 
 ```bash
 # 为目标网卡创建clsact
@@ -398,42 +398,51 @@ direct-action | da
 instructs eBPF classifier to not invoke external TC actions, instead use the TC actions return codes (TC_ACT_OK, TC_ACT_SHOT etc.) for classifiers.
 ```
 
-为了了解并学习容器网络Cilium的工作原理，这次拿容器实例作为流控目标。在实验环境上通过`docker run`运行一个Nginx服务：
+为了了解并学习容器网络Cilium的工作原理，这次拿容器实例作为流控目标。在实验环境上通过`docker run`运行一个Cilium服务：
 
 ```docker
-docker run -d -p 80:80 --name=nginx-xdp nginx:alpine
+docker run --privileged --name ebpf -v /home/sino/ebpf/ebpf-examples.git:/data -d quay.io/cilium/cilium:v1.11.3 sleep infinity
+
+mount bpffs -t bpf /sys/fs/bpf
 ```
 
 这样主机层就会多出一个`veth`网络设备，与容器里的`eth0`形成`veth pair`，流量都是通过这对`veth pair`。因此我们可以将XDP程序`attach`到主机层的veth网络设备上，以此控制容器流量：
 
 ```sh
 > ip a | grep veth
-6: veth09e1d2e@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master docker0 state UP group default
+6: veth5225aac@if5: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc noqueue master docker0 state UP group default
 # 加载XDP BPF程序
-> ip link set dev veth09e1d2e xdp obj tc-xdp-drop-tcp.o sec xdp
+> ip link set dev veth5225aac xdp obj tc-xdp-drop-tcp.o sec xdp
 ```
 
 下面是结合容器实现TC BPF控制Egress的真实命令：
 
 ```
 # 最开始的状态
-> tc qdisc show dev veth09e1d2e
+> tc qdisc show dev veth5225aac
 qdisc noqueue 0: root refcnt 2
+
 # 创建clsact
-> tc qdisc add dev veth09e1d2e clsact
+> tc qdisc add dev veth5225aac clsact
+
 # 再次查看，观察有什么不同
-> tc qdisc show dev veth09e1d2e
+> tc qdisc show dev veth5225aac
 qdisc noqueue 0: root refcnt 2
 qdisc clsact ffff: parent ffff:fff1
+
 # 加载TC BPF程序到容器的veth网卡上
-> tc filter add dev veth09e1d2e egress bpf da obj tc-xdp-drop-tcp.o sec tc
+> tc filter add dev veth5225aac egress bpf da obj tc-xdp-drop-tcp.o sec tc
+
 # 再次查看，观察有什么不同
-> tc qdisc show dev veth09e1d2e
+> tc qdisc show dev veth5225aac
 qdisc noqueue 0: root refcnt 2
 qdisc clsact ffff: parent ffff:fff1
-> tc filter show dev veth09e1d2e egress
+
+> tc filter show dev veth5225aac egress
 filter protocol all pref 49152 bpf chain 0
 filter protocol all pref 49152 bpf chain 0 handle 0x1 tc-xdp-drop-tcp.o:[tc] direct-action not_in_hw id 24 tag 9c60324798bac8be jited
+
+可以看到 tc-xdp-drop-tcp.o 中的 filter 已经 attach 到 ingress 路径，并且使用了 direct-action 模式。 现在这段对流量进行分类+执行动作（classification and action selection）程序已经开始工作了。
 ```
 
 #### 编译
@@ -477,6 +486,22 @@ from 13 to 17: safe
 from 7 to 17: safe
 from 4 to 17: safe
 processed 23 insns, stack depth 0
+```
+
+#### 验证TC程序的效果
+
+测试场景很简单：
+
+- 从容器里访问外部服务，期望是无法请求通。
+```
+curl --dns-servers 8.8.8.8 www.baidu.com
+```
+- 然后通过以下命令把TC卸载掉，发现又能请求通。
+
+#### 卸载 TC 程序
+
+```sh
+tc qdisc del dev veth5225aac clsact
 ```
 
 ### TC和BPF亲密合作
