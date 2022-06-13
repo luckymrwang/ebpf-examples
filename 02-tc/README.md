@@ -102,6 +102,8 @@ $ tc filter add dev eth0 protocol ip parent 1:0 prio 1 u32 \
 6. 其他值：定义在 [include/uapi/linux/pkt_cls.h](https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git/tree/include/uapi/linux/pkt_cls.h)。 [BPF and XDP Reference Guide from Cilium](http://docs.cilium.io/en/latest/bpf/#tc-traffic-control) 有进一步介绍。
 7. 没有定义在以上头文件中的值，属于未定义返回值（unspecified return codes）。
 
+*从 `TC_ACT_UNSPEC` 开始，表示"未指定的action"，用于以下三种场景：i)当一个offloaded tc程序的tc ingress钩子运行在cls_bpf的位置，则该offloaded程序将返回 `TC_ACT_UNSPEC`；ii)为了在多程序场景下继续执行cls_bpf中的下一个BPF程序，后续的程序需要与步骤i中的offloaded tc BPF程序配合使用，但出现了一个非offloaded场景下运行的tc BPF程序；iii)`TC_ACT_UNSPEC` 还可以用于单个程序场景，用于告诉内核继续使用skb，不会产生其他副作用。`TC_ACT_UNSPEC` 与 `TC_ACT_OK` 类似，两者都会将skb通过ingress向上传递到网络栈的上层，或者通过egress向下传递到网络设备驱动程序，以便在egress进行传输。与 `TC_ACT_OK` 的唯一不同之处是，`TC_ACT_OK` 基于tc BPF程序设定的classid来设置 skb->tc_index，而 `TC_ACT_UNSPEC` 是通过 tc BPF 程序之外的 BPF上下文中的 skb->tc_classid 进行设置。*
+
 更多详细文档查看[这里](https://arthurchiao.art/blog/understanding-tc-da-mode-zh/)
 
 ### TC 程序工作方式
@@ -130,6 +132,8 @@ sch_clsact + cls_bpf组合使用时，如果cls_bpf是da模式、只包含单个
 
 1. 主机侧的egress，对应容器的ingress
 2. 主机侧的ingress，对应容器的egress
+
+![tc](../images/bpf-tc.png)
 
 `ingress`钩子在内核中由 `__netif_receive_skb_core() -> sch_handle_ingress()`调用。
 
