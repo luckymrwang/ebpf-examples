@@ -8,6 +8,14 @@
 #include "bpf_endian.h"
 #include "bpf_helpers.h"
 
+typedef unsigned int u32;
+#define bpfprint(fmt, ...)                     \
+  ({                                           \
+    char ____fmt[] = fmt;                      \
+    bpf_trace_printk(____fmt, sizeof(____fmt), \
+                     ##__VA_ARGS__);           \
+  })
+
 // static bool is_TCP(void *data_begin, void *data_end);
 
 /*
@@ -29,6 +37,15 @@ static bool is_TCP(void *data_begin, void *data_end)
     struct iphdr *iph = (struct iphdr *)(eth + 1); // or (struct iphdr *)( ((void*)eth) + ETH_HLEN );
     if ((void *)(iph + 1) > data_end)
       return false;
+
+    // extract src ip and destination ip
+    u32 ip_src = iph->saddr;
+    u32 ip_dst = iph->daddr;
+
+    bpfprint("src ip addr1: %d.%d.%d\n", (ip_src)&0xFF, (ip_src >> 8) & 0xFF, (ip_src >> 16) & 0xFF);
+    bpfprint("src ip addr2:.%d\n", (ip_src >> 24) & 0xFF);
+    bpfprint("dest ip addr1: %d.%d.%d\n", (ip_dst)&0xFF, (ip_dst >> 8) & 0xFF, (ip_dst >> 16) & 0xFF);
+    bpfprint("dest ip addr2: .%d\n", (ip_dst >> 24) & 0xFF);
 
     // Check if IP packet contains a TCP segment
     if (iph->protocol == IPPROTO_TCP)
