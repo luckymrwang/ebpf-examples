@@ -42,6 +42,7 @@ static bool is_TCP(void *data_begin, void *data_end)
     u32 ip_src = iph->saddr;
     u32 ip_dst = iph->daddr;
 
+    // printf
     bpfprint("src ip addr1: %d.%d.%d\n", (ip_src)&0xFF, (ip_src >> 8) & 0xFF, (ip_src >> 16) & 0xFF);
     bpfprint("src ip addr2:.%d\n", (ip_src >> 24) & 0xFF);
     bpfprint("dest ip addr1: %d.%d.%d\n", (ip_dst)&0xFF, (ip_dst >> 8) & 0xFF, (ip_dst >> 16) & 0xFF);
