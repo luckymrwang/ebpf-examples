@@ -16,6 +16,24 @@ static inline void bpf_sock_ops_ipv4(struct bpf_sock_ops *skops)
 	printk("<<< ipv4 op = %d, port %d --> %d\n", skops->op, key.sport, bpf_ntohl(key.dport));
 }
 
+/*
+static inline void bpf_sock_ops_ipv4(struct bpf_sock_ops *skops)
+{
+	struct sock_key key = {};
+	sk_extract4_key(skops, &key);
+	// See whether the source or destination IP is local host
+	if (key.dip4 == 16777343 || key.sip4 == 16777343 ) {
+		// See whether the source or destination port is 10000
+		if (key.dport == 4135 || key.sport == 4135) {
+			int ret = sock_hash_update(skops, &sock_ops_map, &key, BPF_NOEXIST);
+			printk("<<< ipv4 op = %d, port %d --> %d\n", skops->op, key.sport, key.dport);
+			if (ret != 0)
+				printk("*** FAILED %d ***\n", ret);
+		}
+	}
+}
+*/
+
 static inline void bpf_sock_ops_ipv6(struct bpf_sock_ops *skops)
 {
 	if (skops->remote_ip4)
